@@ -1,7 +1,5 @@
 from agent_model import *
 
-args = Arguments()
-
 
 def weights_init(module):
     """
@@ -24,13 +22,13 @@ class Agent(nn.Module):
         self.traits = traits
         self.resource_division = nn.Linear(args.num_agents - 1, args.num_agents - 1)
         self.msgs_hidden = torch.zeros(1, args.msg_v_dim)
-        if args.flag == 1:  # text model
+        if args.flag == 1:
             self.char_hidden = torch.zeros(1, args.encoded_size)
         self.apply(weights_init)
 
     def reset_agent(self, traits):
         self.msgs_hidden = torch.zeros(1, args.msg_v_dim)
-        if args.flag == 1:  # text model
+        if args.flag == 1:
             self.char_hidden = torch.zeros(1, args.encoded_size)
         self.traits = traits
 

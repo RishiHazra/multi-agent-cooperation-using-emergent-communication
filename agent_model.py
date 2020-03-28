@@ -6,26 +6,12 @@ from arguments import Arguments
 args = Arguments()
 
 
-# class ImgEncoder(nn.Module):
-#     def __init__(self):
-#         super(ImgEncoder, self).__init__()
-#         self.layers = nn.Sequential(
-#             nn.Conv2d(3, 6, 5),
-#             nn.ReLU(),
-#             nn.MaxPool2d(2, 2),
-#             nn.Conv2d(6, 16, 5),
-#             nn.ReLU(),
-#             nn.MaxPool2d(2, 2))
-#         self.fc1 = nn.Linear(16 * 5 * 5, 120)
-#         self.fc2 = nn.Linear(120, args.encoded_size)
-#
-#     def forward(self, image):
-#         x = self.layers(image).view(-1, 16 * 5 * 5)  # [b, 16, 5, 5]
-#         x = torch.relu(self.fc1(x))  # [b, 120]
-#         x = torch.relu(self.fc2(x))  # [b, 84]
-#         return x
-
 class ImgEncoder(nn.Module):
+    """
+    encodes the partial observations
+    :param: cropped_image: partial image observations
+    :returns: x: encoded image observations
+    """
     def __init__(self):
         super(ImgEncoder, self).__init__()
         self.layer = nn.Sequential(
@@ -43,7 +29,32 @@ class ImgEncoder(nn.Module):
         return x
 
 
+class CharEncoder(nn.Module):
+    """
+    encodes characters for Scramble
+    :param: char: indexed character (total indices: num unique characters)
+            char_hidden_old: old hidden state of gru
+    :return: char_hidden_new: new hidden state of gru
+    """
+    def __init__(self):
+        super(CharEncoder, self).__init__()
+        self.gru = nn.GRUCell(1, args.text_hidden)
+
+    def forward(self, char, char_hidden_old):
+        char_hidden_new = self.gru(char, char_hidden_old)
+        return char_hidden_new
+
+
 class Receiver(nn.Module):
+    """
+    Receives the input messages from all other agents
+    and attends to them based on their key and query
+    vectors. The query vectors are functions of intolerance.
+    :param: msgs_input: all input messages [key, value]
+            intolerance: intolerance parameter
+    :return: pooled: pooled messages
+             attention: attention weights
+    """
     def __init__(self):
         super(Receiver, self).__init__()
         self.layer_query = nn.Linear(1, args.msg_k_dim)
@@ -59,6 +70,16 @@ class Receiver(nn.Module):
 
 
 class Sender(nn.Module):
+    """
+    Broadcasts different messages to different agents.
+    Keys are functions of resources parameter.
+    :param: pooled: pooled messages from Receiver
+            msg_hidden_old: hidden state of gru-cell
+            img_enc: output of ImgEncoder used for calculating msg_v
+            resources: resources at disposal
+    :return: msgs_hidden_new: new hidden state of gru-cell
+             msgs_broadcast: broadcasts messages to all agents
+    """
     def __init__(self):
         super(Sender, self).__init__()
         self.gru = nn.GRUCell(args.msg_v_dim, args.msg_v_dim)
@@ -70,21 +91,43 @@ class Sender(nn.Module):
         msg_hidden_new = self.gru(pooled.unsqueeze(0), msg_hidden_old)
         msg_v = self.w_enc(img_enc) + self.w_msg(msg_hidden_new)
         msg_k = self.layer_resources(resources.unsqueeze(1))
-        # different messages for different agents
-        msgs_broadcast = torch.cat((msg_k, msg_v[0].clone().repeat(args.num_agents-1, 1)), dim=-1)  # [num_agents-1,10]
+        # different messages for different agents # [num_agents-1,10]
+        msgs_broadcast = torch.cat((msg_k, msg_v[0].clone().repeat(args.num_agents-1, 1)), dim=-1)
         return msg_hidden_new, msgs_broadcast
 
 
 class Decoder(nn.Module):
+    """
+    Takes action in a differentiable environment (using
+    a Straight Through version of Gumbel-Softmax sampling).
+    Decodes the pooled messages and the image encodings
+    :param: encoder_out: output of ImgEncoder
+            msg_pooled: pooled messages from Receiver
+    :return: action: output of Straight-through Gumbel Softmax
+             log_probs: log probability of all actions
+    """
     def __init__(self):
         super(Decoder, self).__init__()
         self.w_img = nn.Linear(args.encoded_size, args.num_classes)
         self.w_msg = nn.Linear(args.msg_v_dim, args.num_classes)
         self.log_softmax = nn.LogSoftmax(dim=-1)
+        self.softmax = nn.Softmax(dim=-1)
+
+    @staticmethod
+    def sample_gumble(shape, eps=1e-20):
+        u = torch.rand(shape)
+        return -torch.log(-torch.log(u + eps) + eps)
+
+    def gumble_softmax_sample(self, log_logits, temperature):
+        y = log_logits + self.sample_gumble(log_logits.size())
+        return self.softmax(y / temperature)
 
     def forward(self, encoder_out, msg_pooled):
         y = self.w_img(encoder_out) + self.w_msg(msg_pooled.unsqueeze(0))
-        # y = self.w_msg(msg_pooled.unsqueeze(0))
-        y = self.log_softmax(y)
-        # print(y)
-        return y
+        y_log_probs = self.log_softmax(y)
+        y_gumbel = self.gumble_softmax_sample(y_log_probs, args.temp)
+
+        y_gumbel, ind = y_gumbel.max(dim=-1)
+        y_hard = torch.tensor(ind, dtype=torch.float32)
+        action = (y_hard - y_gumbel).detach() + y_gumbel
+        return action.long(), y_log_probs.gather(1, action.long().view(-1, 1)).view(-1), y_log_probs

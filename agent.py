@@ -7,7 +7,6 @@ def weights_init(module):
     """
     if isinstance(module, nn.Linear):
         nn.init.xavier_uniform_(module.weight, gain=1)
-        # nn.init.constant_(module.bias, 0)
 
 
 class Agent(nn.Module):

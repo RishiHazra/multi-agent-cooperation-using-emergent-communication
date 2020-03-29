@@ -15,10 +15,10 @@ from agent import Agent
 from arguments import Arguments
 
 args = Arguments()
-model_path = 'text_model'
-log_file = open('text_log', 'w')
-resources_file = open('text_resource_allocation.txt', 'w')
-traits_file = open('text_traits.pkl', 'wb')
+model_path = 'text_model_without_gru'
+log_file = open('text_log_without_gru', 'w')
+resources_file = open('text_resource_allocation_without_gru.txt', 'w')
+traits_file = open('text_traits_without_gru.pkl', 'wb')
 
 
 def instantiate_agents():
@@ -126,7 +126,8 @@ if __name__ == '__main__':
 
             # print(traits[0][0])
             # reputation = dict([(agent_id, torch.zeros(args.num_agents - 1)) for agent_id in range(args.num_agents)])
-            resources_file.write('episode:' + str(episode_id) + '\n')
+            if episode_id == 48000:
+                resources_file.write('episode:' + str(episode_id) + '\n')
 
             # begin episode
             for step in range(args.num_steps):
@@ -141,7 +142,8 @@ if __name__ == '__main__':
                     agent_log_probs[agent_id].append(predicted_probs)
                     agent_all_log_probs[agent_id].append(all_probs.squeeze(0))
 
-                    resources_file.write('agent:' + str(agent_id) +
+                    if episode_id == 48000:
+                        resources_file.write('agent:' + str(agent_id) +
                                          ' resource allocation: ' + str(traits[agent_id][0]) + '\n')
 
                     # print(step, agent_id, traits[agent_id][2][0].item())

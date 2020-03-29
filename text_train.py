@@ -15,10 +15,10 @@ from agent import Agent
 from arguments import Arguments
 
 args = Arguments()
-model_path = 'text_model_without_gru'
-log_file = open('text_log_without_gru', 'w')
-resources_file = open('text_resource_allocation_without_gru.txt', 'w')
-traits_file = open('text_traits_without_gru.pkl', 'wb')
+model_path = 'text_model'
+log_file = open('text_log', 'w')
+resources_file = open('text_resource_allocation.txt', 'w')
+traits_file = open('text_traits.pkl', 'wb')
 
 
 def instantiate_agents():

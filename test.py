@@ -1,108 +1,124 @@
+"""
+test file for images
+"""
+
 import gc
+import os
+import pickle as pkl
 import torch
 import numpy as np
-import torchvision
-import torchvision.transforms as transforms
-
-from torch.optim import Adam
+import utils
 
 from agent import Agent
 from arguments import Arguments
 
 args = Arguments()
+model_path = 'model_with_L1'
+traits_file = open('traits_with_L1.pkl', 'rb')
 
 
-def process_dataset():
-    transform_train = transforms.Compose([
-        transforms.RandomCrop(32, padding=4),
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-    ])
+def instantiate_agents(num_step):
+    agent_traits = pkl.load(traits_file)
 
-    transform_test = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-    ])
-    train_sets = torchvision.datasets.CIFAR10(root='./cifar-10', train=True, download=True, transform=transform_train)
-    test_sets = torchvision.datasets.CIFAR10(root='./cifar-10', train=False, download=True, transform=transform_test)
-    return train_sets, test_sets
+    agent_nws = dict([(agent, Agent(agent_traits[agent]))
+                      for agent in range(args.num_agents)])
 
+    for agent in range(args.num_agents):
+        agent_nws[agent].load_state_dict(torch.load(os.path.join(model_path, str(num_step) + '_' + str(agent))))
 
-def instantiate_agents(evaluate):
-    agent_traits = dict((agent_id, list())
-                        for agent_id in range(args.num_agents))
-    for agent_id in range(args.num_agents):
-        agent_traits[agent_id] = torch.softmax(torch.tensor(torch.ones(args.num_agents - 1)).unsqueeze(0), dim=-1)
-        agent_traits[agent_id] = torch.cat((agent_traits[agent_id],
-                                            torch.tensor(np.random.random(args.num_agents - 1),
-                                                         dtype=torch.float32).unsqueeze(0)))
-        agent_traits[agent_id] = torch.cat((agent_traits[agent_id],
-                                            torch.tensor(torch.ones(args.num_agents - 1)).unsqueeze(0)))
-
-    agent_nws = dict([(agent_id, Agent(agent_traits[agent_id]))
-                      for agent_id in range(args.num_agents)])
     return agent_nws, agent_traits
 
 
-def reward_function():
-    return 0
-
-
 if __name__ == '__main__':
-    agents, traits = instantiate_agents()
-    optimizers = dict([(agent_id, Adam(agents[agent_id].parameters(),
-                                       lr=args.learning_rate)) for agent_id in range(args.num_agents)])
-    total_resources = dict([(agent_id, sum(traits[agent_id][0])) for agent_id in range(args.num_agents)])
+    step = 16000  # model step to be loaded
+    agents, traits_agents = instantiate_agents(step)
+    # calculate total reputation by summing all the 0th elements of the reputation lists
+    total_reputation = torch.tensor(0.0)
+    for agent_id in range(args.num_agents):
+        total_reputation += traits_agents[agent_id][2][0]
 
-    train_set, test_set = process_dataset()
-    train_loader = torch.utils.data.DataLoader(train_set, batch_size=128, shuffle=True, num_workers=2)
-    test_loader = torch.utils.data.DataLoader(test_set, batch_size=100, shuffle=False, num_workers=2)
+    # load test set
+    test_set = utils.process_dataset(evaluate=True)
+    # classes in CIFAR-10
     classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
 
-    for episode_id in range(args.num_episodes):
-        net_reward = 0
+    num_consensus = 0  # number of times the community reaches consensus
+    running_rewards = 0.0
 
-        consensus = dict([(label, 0) for label in range(args.num_classes)])
-        agent_log_probs = dict([(agent, []) for agent in agents])
-        msgs_hidden_old = dict([(agent_id, torch.zeros(args.msg_v_dim)) for agent_id in range(args.num_agents)])
-        msgs_input = dict([(agent_id, torch.zeros(args.num_agents - 1, args.msg_k_dim + args.msg_v_dim))
-                           for agent_id in range(args.num_agents)])
-        img = dict([(agent_id, torch.zeros(32, 32)) for agent_id in range(args.num_agents)])
-        reputation = dict([(agent_id, torch.zeros(args.num_agents - 1)) for agent_id in range(args.num_agents)])
+    for epoch in range(3):
+        for episode_id in range(args.num_test_episodes):
+            # pick up one sample from test dataset
+            (img, target) = test_set[episode_id]
+            img = img.unsqueeze(0)
+            target = torch.tensor([target])
 
-        for step in range(args.num_steps):
+            # initialize / re-initialize all parameters
+            traits = [traits_agents[agent_id].clone() for agent_id in range(args.num_agents)]
+            agent_rewards = dict([(agent_id, []) for agent_id in range(args.num_agents)])
+            msgs_input = dict([(agent_id, torch.zeros(args.num_agents - 1, args.msg_v_dim + args.msg_k_dim))
+                               for agent_id in range(args.num_agents)])
+            msgs_broadcast = dict([(agent_id, torch.zeros(args.num_agents - 1, args.msg_v_dim))
+                                   for agent_id in range(args.num_agents)])
+
+            # reset agent hidden vectors of LSTM and traits to original values
             for agent_id in range(args.num_agents):
-                predicted_probs, msgs_broadcast, msg_hidden_new, attention = \
-                                                                            agents[agent_id](img[agent_id],
-                                                                                             msgs_input[agent_id],
-                                                                                             msgs_hidden_old[agent_id])
-                action = predicted_probs.max(1)[1]
-                consensus[action] += reputation[agent_id][0]
-                agent_log_probs[agent_id].append(torch.log(predicted_probs.max(1)[0]))
+                agents[agent_id].reset_agent(traits[agent_id])
+                agents[agent_id].eval()
 
-                index = 0
-                for neighbour in range(args.num_agents):
-                    if neighbour != agent_id:
-                        msgs_input[neighbour][index] = msgs_broadcast[index]
-                        if index == 0:
-                            reputation[agent_id] = attention.repeat(args.num_agents - 1)
-                        else:
-                            reputation[neighbour] = torch.sum(reputation[agent_id],
-                                                              attention[index].repeat(args.num_agents - 1))
-                        index += 1
+            # begin episode
+            for step in range(args.num_steps):
+                consensus = [0] * args.num_classes
+                for agent_id in range(args.num_agents):
 
-                msgs_hidden_old[agent_id] = msg_hidden_new
+                    # agents get to see the cropped image for partial observability
+                    cropped_image = utils.crop_image(img, str(agent_id))
+                    traits[agent_id], action, _, msgs_broadcast[agent_id], _ = \
+                        agents[agent_id](cropped_image,
+                                         msgs_input[agent_id])
 
-            for agent_id in range(args.num_agents):
-                traits[agent_id][2] = reputation[agent_id] / (args.num_agents - 1)
+                    # if episode_id == 48000:
+                    #     resources_file.write('agent:' + str(agent_id) +
+                    #                          ' resource allocation: ' + str(traits[agent_id][0]) + '\n')
 
-            if consensus.max(1)[0] > args.threshold:
-                final_pred = consensus.max(1)[1]
-                break
-            else:
-                net_reward -= 1
+                    # store the value of reputation parameter in the consensus
+                    if step != 0:
+                        consensus[action.item()] += traits[agent_id][2][0].item()
 
-        gc.collect()
+                # message passing
+                for agent_id in range(args.num_agents):
+                    index1 = 0
+                    for neighbour in range(args.num_agents):
+                        if neighbour < agent_id:
+                            msgs_input[neighbour][agent_id - 1] = msgs_broadcast[agent_id][index1].clone()
+                            index1 += 1
+                        elif neighbour > agent_id:
+                            msgs_input[neighbour][agent_id] = msgs_broadcast[agent_id][index1].clone()
+                            index1 += 1
 
-# TODO : add model.eval()
+                # define reward function
+                if max(np.array(consensus)) > args.threshold and \
+                        torch.tensor(consensus).argmax().unsqueeze(0) == target:
+                    prize = args.prize
+                    num_consensus += 1
+                    for agent_id in range(args.num_agents):
+                        prize_share = (traits[agent_id][2][0].detach() / total_reputation) * prize
+                        agent_rewards[agent_id].append(prize_share.item())
+                    break
+                else:
+                    for agent_id in range(args.num_agents):
+                        prize_share = (traits[agent_id][2][0].detach() / total_reputation) * (-1)
+                        agent_rewards[agent_id].append(prize_share)
+
+            print_rewards = [torch.tensor(agent_rewards[agent_id]).sum().item()
+                             for agent_id in range(args.num_agents)]
+
+            # compute mean reward of 10,000 steps (number of test images)
+            running_rewards += np.array(print_rewards).sum()
+            if episode_id % 9999 == 0 and episode_id != 0:
+                print('[{}, {}] rewards: {} (reached consensus: {} / 10000)'.format(epoch, episode_id,
+                                                                                   running_rewards / 10000,
+                                                                                   num_consensus))
+                running_rewards = 0.0
+                num_consensus = 0
+
+            gc.collect()

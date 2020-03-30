@@ -3,6 +3,7 @@ train file for text
 """
 import os
 import gc
+from tqdm import tqdm
 import numpy as np
 import pickle
 from operator import itemgetter
@@ -16,9 +17,10 @@ from arguments import Arguments
 
 args = Arguments()
 model_path = 'text_model'
-log_file = open('text_log', 'w')
+log_file = open('text_log.txt', 'w')
 resources_file = open('text_resource_allocation.txt', 'w')
 traits_file = open('text_traits.pkl', 'wb')
+char_map_file = open('character_mapping.pkl', 'wb')
 
 
 def instantiate_agents():
@@ -84,20 +86,22 @@ if __name__ == '__main__':
                                              lr=args.learning_rate)) for agent_id in range(args.num_agents)])
     # divide dataset into train and test sets
     train_sets = torchvision.datasets.CIFAR10(root='./cifar-10', train=True, download=False)
-    test_sets = torchvision.datasets.CIFAR10(root='./cifar-10', train=False, download=False)
 
     # classes in CIFAR-10
     classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
 
     # indexing characters
     character_map = utils.index_chars(classes)
+    pickle.dump(character_map, char_map_file)
+    char_map_file.close()
 
     # Initialize running mean of rewards
     rewards_mean = dict([(agent, torch.zeros(args.num_steps)) for agent in agents])
     running_rewards = 0.0
-    num_consensus = 0
+    num_consensus = 0  # number of times the community reaches consensus
+
     for epoch in range(5):
-        for episode_id in range(args.num_episodes):
+        for episode_id in tqdm(range(args.num_episodes)):
             _, target = train_sets[episode_id]
             label_class = classes[target]
 
@@ -110,7 +114,6 @@ if __name__ == '__main__':
             # initialize other parameters
             target = torch.tensor([target])
             traits = [traits_agents[agent_id].clone() for agent_id in range(args.num_agents)]
-            agent_all_log_probs = dict([(agent_id, []) for agent_id in range(args.num_agents)])
             agent_log_probs = dict([(agent_id, []) for agent_id in range(args.num_agents)])
             agent_rewards = dict([(agent_id, []) for agent_id in range(args.num_agents)])
             msgs_input = dict([(agent_id, torch.zeros(args.num_agents - 1, args.msg_v_dim + args.msg_k_dim))
@@ -124,8 +127,6 @@ if __name__ == '__main__':
             for agent_id in range(args.num_agents):
                 agents[agent_id].reset_agent(traits[agent_id])
 
-            # print(traits[0][0])
-            # reputation = dict([(agent_id, torch.zeros(args.num_agents - 1)) for agent_id in range(args.num_agents)])
             if episode_id == 48000:
                 resources_file.write('episode:' + str(episode_id) + '\n')
 
@@ -134,23 +135,22 @@ if __name__ == '__main__':
                 consensus = [0] * args.num_classes
 
                 for agent_id in range(args.num_agents):
-
-                    traits[agent_id], action, predicted_probs, msgs_broadcast[agent_id], all_probs = \
+                    # agents get to see the a single character for partial observability
+                    traits[agent_id], action, predicted_probs, msgs_broadcast[agent_id] = \
                         agents[agent_id](torch.tensor([indices[agent_id]], dtype=torch.float32).unsqueeze(0),
                                          msgs_input[agent_id])
 
                     agent_log_probs[agent_id].append(predicted_probs)
-                    agent_all_log_probs[agent_id].append(all_probs.squeeze(0))
 
                     if episode_id == 48000:
                         resources_file.write('agent:' + str(agent_id) +
-                                         ' resource allocation: ' + str(traits[agent_id][0]) + '\n')
+                                             ' resource allocation: ' + str(traits[agent_id][0]) + '\n')
 
-                    # print(step, agent_id, traits[agent_id][2][0].item())
+                    # store the value of reputation parameter in the consensus
                     if step != 0:
                         consensus[action.item()] += traits[agent_id][2][0].item()
-                        # consensus[action.item()] += 1
 
+                # message passing
                 for agent_id in range(args.num_agents):
                     index1 = 0
                     for neighbour in range(args.num_agents):
@@ -161,41 +161,16 @@ if __name__ == '__main__':
                             msgs_input[neighbour][agent_id] = msgs_broadcast[agent_id][index1].clone()
                             index1 += 1
 
-                    # for neighbour in range(args.num_agents):
-                    #     if neighbour != agent_id:
-                    #         msgs_input[neighbour][index] = msgs_broadcast[index].clone()
-                    #         # reputation[neighbour] += attention[index].detach().repeat(args.num_agents - 1)
-                    #         index += 1
-
-                # for agent_id in range(args.num_agents):
-                #     traits[agent_id][2] = reputation[agent_id] / (args.num_agents - 1)
-                # total_reputation += traits[agent_id][2][0]
-
-                # prize = np.array(consensus)[target.item()]
-                # for agent_id in range(args.num_agents):
-                #     prize_share = (traits[agent_id][2][0].detach() / total_reputation) * prize
-                #     agent_rewards[agent_id].append(prize_share)
-
                 # define reward function
                 if max(np.array(consensus)) > args.threshold and \
                         torch.tensor(consensus).argmax().unsqueeze(0) == target:
-                    # final_pred = torch.tensor(consensus).argmax().unsqueeze(0)
-                    # if final_pred == target:
-                    # print('episode:', episode_id, 'steps taken:', step, '(reached consensus with correct prediction)')
                     prize = args.prize
                     num_consensus += 1
-                    # else:
-                    #  print('episode:', episode_id, 'steps taken:', step, '(reached consensus with wrong prediction)')
-                    #     prize = -args.num_agents
+
                     for agent_id in range(args.num_agents):
                         prize_share = (traits[agent_id][2][0].detach() / total_reputation) * prize
                         agent_rewards[agent_id].append(prize_share.item())
                     break
-                # elif step == args.num_steps - 1:
-                #     print('episode:', episode_id, '(did not reach consensus)')
-                #     final_pred = torch.tensor(consensus).unsqueeze(0)
-                #     for agent_id in range(args.num_agents):
-                #         agent_rewards[agent_id].append(-args.penalize)
                 else:
                     for agent_id in range(args.num_agents):
                         prize_share = (traits[agent_id][2][0].detach() / total_reputation) * (-1)
@@ -211,26 +186,15 @@ if __name__ == '__main__':
             for optim in optimizers.values():
                 optim.zero_grad()
 
-            # for agent_id in range(args.num_agents):
-            #     losses[agent_id].backward(retain_graph=True)
-            #     # print(agents[0].resource_division.weight)
-            #     for optim in optimizers.values():
-            #         optim.step()
-            # print('target:', target.item(), '| total rewards:', np.array(print_rewards).sum(),
-            #       '| consensus:', consensus, '\n')
-
             for agent_id in range(args.num_agents):
                 agent_loss += losses[agent_id].clone()
-            # print('target:', target.item(), '| total rewards:', np.array(print_rewards).sum(),
-            #       '| consensus:', consensus, '\n')
-            agent_loss.backward()
 
-            # for agent_id in range(args.num_agents):
-            #     clip_grad_value_(agents[agent_id].parameters(), 1.0)
+            agent_loss.backward()
 
             for optim in optimizers.values():
                 optim.step()
 
+            # print mean reward of every 2000 steps
             running_rewards += np.array(print_rewards).sum()
             if episode_id == 0 and epoch == 0:
                 print('[{}, {}] rewards: {} (reached consensus: {} / 2000)'.format(epoch, episode_id,
@@ -251,7 +215,8 @@ if __name__ == '__main__':
 
             log_file.flush()
 
-            if episode_id % 5000 == 0 and episode_id != 0:
+            # save every 8000th model parameters
+            if episode_id % 8000 == 0 and episode_id != 0:
                 for agent_id in range(args.num_agents):
                     with open(os.path.join(model_path, str(episode_id) + '_' + str(agent_id)), 'wb') as f:
                         torch.save(agents[agent_id].state_dict(), f)

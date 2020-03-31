@@ -63,6 +63,7 @@ if __name__ == '__main__':
 
     num_consensus = 0  # number of times the community reaches consensus
     running_rewards = 0.0
+    avg_steps, step = 0, 0  # time needed on as average to reach consensus
 
     for episode_id in tqdm(range(args.num_test_episodes)):
         # pick up one sample from test dataset
@@ -142,14 +143,17 @@ if __name__ == '__main__':
 
         # compute mean reward of 2,000 episodes (number of test images)
         running_rewards += np.array(print_rewards).sum()
+        avg_steps += step
         if episode_id % 1999 == 0 and episode_id != 0:
-            print('[{}] rewards: {} (reached consensus: {} / 2000)'.format(episode_id,
+            print('[{}] rewards: {} steps: {} (reached consensus: {} / 2000)'.format(episode_id,
                                                                             running_rewards / 2000,
+                                                                            avg_steps / 2000,
                                                                             num_consensus))
             running_rewards = 0.0
             num_consensus = 0
+            avg_steps = 0
 
         # save embeddings for 1000 episodes
         if episode_id < 1000:
             for agent_id in agents:
-                save_embeddings(save_msgs_broadcast[agent_id], target.item(), agent_id, episode_id, policy_step)
+                save_embeddings(save_msgs_broadcast[agent_id][-2:], target.item(), agent_id, episode_id, policy_step)

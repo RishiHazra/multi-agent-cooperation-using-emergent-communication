@@ -99,6 +99,7 @@ if __name__ == '__main__':
     rewards_mean = dict([(agent, torch.zeros(args.num_steps)) for agent in agents])
     running_rewards = 0.0
     num_consensus = 0  # number of times the community reaches consensus
+    avg_steps, step = 0, 0  # time needed on as average to reach consensus
 
     for epoch in range(5):
         for episode_id in tqdm(range(args.num_episodes)):
@@ -196,22 +197,27 @@ if __name__ == '__main__':
 
             # print mean reward of every 2000 steps
             running_rewards += np.array(print_rewards).sum()
+            avg_steps += step
             if episode_id == 0 and epoch == 0:
-                print('[{}, {}] rewards: {} (reached consensus: {} / 2000)'.format(epoch, episode_id,
-                                                                                   -25.00, num_consensus))
-                log_file.write('Episode: ' + str(episode_id) + ' rewards: ' + str(-25.00)
+                print('[{}, {}] rewards: {} step: {} (reached consensus: {} / 2000)'.format(epoch, episode_id,
+                                                                                            -25.00, 25,
+                                                                                            num_consensus))
+                log_file.write('Episode: ' + str(episode_id) + ' rewards: ' + str(-25.00) + ' steps: ' + str(25)
                                + ' consensus: ' + str(num_consensus) + '/2000 ' + "\n")
                 running_rewards = 0.0
                 num_consensus = 0
 
             elif episode_id % 2000 == 0:  # print every 2000 mini-batches
-                print('[{}, {}] rewards: {} (reached consensus: {} / 2000)'.format(epoch, episode_id,
-                                                                                   running_rewards / 2000,
-                                                                                   num_consensus))
+                print('[{}, {}] rewards: {} steps: {} (reached consensus: {} / 2000)'.format(epoch, episode_id,
+                                                                                             running_rewards / 2000,
+                                                                                             avg_steps / 2000,
+                                                                                             num_consensus))
                 log_file.write('Episode: ' + str(episode_id) + ' rewards: ' + str(running_rewards / 2000)
-                               + ' consensus: ' + str(num_consensus) + '/2000 ' + "\n")
+                               + ' steps: ' + str(avg_steps / 2000) + ' consensus: ' +
+                               str(num_consensus) + '/2000 ' + "\n")
                 running_rewards = 0.0
                 num_consensus = 0
+                avg_steps = 0
 
             log_file.flush()
 

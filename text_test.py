@@ -98,7 +98,7 @@ if __name__ == '__main__':
 
                 # agents get to see the a single character for partial observability
 
-                traits[agent_id], action, _, msgs_broadcast[agent_id], _ = \
+                traits[agent_id], action, _, msgs_broadcast[agent_id] = \
                     agents[agent_id](torch.tensor([indices[agent_id]], dtype=torch.float32).unsqueeze(0),
                                      msgs_input[agent_id])
 

@@ -132,7 +132,7 @@ if __name__ == '__main__':
         # compute mean reward of 2,000 episodes (number of test images)
         running_rewards += np.array(print_rewards).sum()
         if episode_id % 1999 == 0 and episode_id != 0:
-            print('[{}] rewards: {} (reached consensus: {} / 10000)'.format(episode_id,
+            print('[{}] rewards: {} (reached consensus: {} / 2000)'.format(episode_id,
                                                                             running_rewards / 2000,
                                                                             num_consensus))
             running_rewards = 0.0

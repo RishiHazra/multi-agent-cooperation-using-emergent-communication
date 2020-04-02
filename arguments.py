@@ -14,7 +14,7 @@ def Arguments():
                         help='output dimension of encoder')
     parser.add_argument('--prize', type=int, default=0,
                         help='reward on reaching consensus')
-    parser.add_argument('--penalize', type=int, default=50,
+    parser.add_argument('--penalize', type=int, default=-1,
                         help='penalize for not reaching consensus during the episode')
     parser.add_argument('--threshold', type=int, default=2,
                         help='minimum value to reach consensus')

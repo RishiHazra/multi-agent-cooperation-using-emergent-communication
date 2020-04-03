@@ -45,8 +45,7 @@ def instantiate_agents():
                                              torch.tensor(repo[agent_ind], dtype=torch.float32,
                                                           requires_grad=False).repeat(
                                                  args.num_agents - 1).to(device[agent_ind]).unsqueeze(0)))
-        print(agent_traits[agent_ind][2])
-
+        
     agent_nws = dict()
     for agent_ind in range(args.num_agents):
         agent_nws[agent_ind] = Agent(device[agent_ind], agent_traits[agent_ind]).to(device[agent_ind])
@@ -91,15 +90,15 @@ if __name__ == '__main__':
     device = {}
     for agent_id in range(args.num_agents):
         device[agent_id] = torch.device("cuda:" + str(agent_id % count))
-    # else:
-    #     device ="cpu"
+        # device[agent_id] = 'cpu'
 
     # create the required directories
     if not os.path.exists(model_path):
         os.mkdir(model_path)
 
     # fix reputation
-    repo = [1, 1, 2, 2, 1, 1, 2, 1, 2, 1]
+    repo = utils.generate_reputation(args.num_agents, sum_repo=60, upper_limit=4)
+    print(repo)
 
     # instantiate agents and their corresponding traits
     agents, traits_agents = instantiate_agents()
@@ -150,7 +149,7 @@ if __name__ == '__main__':
                 msgs_broadcast[agent_id] = torch.zeros(args.num_agents - 1, args.msg_v_dim + args.msg_k_dim,
                                                        dtype=torch.float32).to(device[agent_id])
 
-            agent_loss = torch.tensor(0.0).float()
+            agent_loss = torch.tensor(0.0).to('cuda:2')
             losses = dict()
 
             # reset agent hidden vectors of LSTM and traits to original values
@@ -242,9 +241,9 @@ if __name__ == '__main__':
                 optim.zero_grad()
 
             for agent_id in range(args.num_agents):
-                losses[agent_id].backward(retain_graph=True)
+                agent_loss += losses[agent_id].to('cuda:2')
 
-            # agent_loss.backward()
+            agent_loss.backward()
 
             # for agent_id in range(args.num_agents):
             #     clip_grad_value_(agents[agent_id].parameters(), 1.0)

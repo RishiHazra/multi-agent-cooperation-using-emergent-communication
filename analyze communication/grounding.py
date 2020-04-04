@@ -81,7 +81,7 @@ if __name__ == '__main__':
 
     files_to_search = []
     for agent_id in range(args.num_agents):
-        files_to_search += ['msg_' + str(agent_id) + '_EP_']
+        files_to_search += ['Im_msg_' + str(agent_id) + '_EP_']
 
     all_files = []
 

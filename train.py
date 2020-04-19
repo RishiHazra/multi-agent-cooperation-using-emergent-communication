@@ -131,7 +131,7 @@ if __name__ == '__main__':
                 agents[agent_id].reset_agent(traits[agent_id])
 
             # reputation = dict([(agent_id, torch.zeros(args.num_agents - 1)) for agent_id in range(args.num_agents)])
-            if resources_file == 48000:
+            if episode_id == 48000:
                 resources_file.write('episode:' + str(episode_id) + '\n')
             # begin episode
             for step in range(args.num_steps):

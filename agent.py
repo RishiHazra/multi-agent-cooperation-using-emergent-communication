@@ -48,7 +48,7 @@ class Agent(nn.Module):
         pooled, _ = self.receiver(msgs_input, self.traits[1].clone())
 
         # resource division
-        self.traits[0] = self.softmax(self.resource_division(self.traits[0].clone().unsqueeze(0)))[0]
+        self.traits[0] = self.softmax(self.resource_division(self.traits[0].clone()))
 
         # broadcast messages
         if args.flag == 0:

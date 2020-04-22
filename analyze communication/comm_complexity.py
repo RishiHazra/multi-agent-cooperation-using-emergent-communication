@@ -50,13 +50,8 @@ def calculate_entropy(samples_X):
 
 
 if __name__ == '__main__':
-    # search_path = input("Enter directory path to search : ")
-    # search_path = '../00000'  # 4-agents
-    # repo = [1, 1, 1, 1, 2, 1, 2, 1, 2, 2]  # 10 agents
-    # repo = [1, 1, 3, 2, 1, 1, 1, 1, 2, 1]  # limited labs
-    # repo = [1, 1, 3, 1, 2, 1, 1, 1, 1, 2]  # 10 agents bar
-    # search_path = '00000' # 10-agents restricted comm; limited labs+ repo: [3, 2, 2, 1, 1, 1, 1, 1, 1]
-    search_path = '0000010agents'
+    search_path = input("Enter directory path to search : ")  
+    #  search_path = '00000'
     neighbors = {0: [1, 2], 1: [0, 3, 4, 5, 6, 7, 8, 9], 2: [0, 3, 4, 5, 6, 7, 8, 9], 3: [1, 2], 4: [1, 2],
                  5: [1, 2], 6: [1, 2], 7: [1, 2], 8: [1, 2], 9: [1, 2]}
 
@@ -91,23 +86,16 @@ if __name__ == '__main__':
     for file in all_files:
         f1 = open(file)
         lines = f1.readlines()
-        # agent_index = int(file.split('_')[2])
+        agent_index = int(file.split('_')[2])
 
         for line in lines[-1:]:  # only consider the last message passing step (for each agent)
             line = line.strip('\n').split('\t')
-            # num_neighbors = len(neighbors[agent_index])
-            # messages = np.split(np.array(line), 10 - 1)
+            num_neighbors = len(neighbors[agent_index])
+            messages = np.split(np.array(line), num_neighbors)
             messages = np.split(np.array(line), 9)
 
             for message in messages:
-                X[file.split('_')[2]] += [message]  # msg_v (msg_k is not considered) for each agent
-
-        # # if len(lines) < args.num_steps:  # only episodes where correct prediction was made
-        # for line in lines[-1:]:  # only consider the last message passing step (for each agent)
-        #     line = line.strip('\n').split('\t')
-        #     messages = np.split(np.array(line), 4 - 1)
-        #
-        #     X += [messages[0][5:]]  # msg_v (msg_k is not considered)
+                X[file.split('_')[2]] += [message]
 
     avg = 0
     for agent, values in X.items():  # calculate entropy on a per agent basis

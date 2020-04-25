@@ -3,10 +3,12 @@ train file for images
 """
 
 import gc
-import pickle
 import os
+import pickle
+from tqdm import tqdm
 import numpy as np
 import torch
+from collections import defaultdict
 # from torch.nn.utils import clip_grad_value_
 import torch.nn as nn
 import torch.optim as optim
@@ -16,13 +18,13 @@ from agent import Agent
 from arguments import Arguments
 
 args = Arguments()
-model_path = 'model_with_L1'
-log_file = open('log_with_L1.txt', 'w')
-resources_file = open('resource_allocation_with_L1.txt', 'w')
-traits_file = open('traits_with_L1.pkl', 'wb')
+model_path = 'model_restricted_comm_4agents'
+log_file = open('log_restricted_comm_4agents.txt', 'w')
+resources_file = open('resource_allocation_restricted_comm_4agents.txt', 'w')
+traits_file = open('traits_restricted_comm_4agents.pkl', 'wb')
 
 
-def instantiate_agents():
+def instantiate_agents(neighbors):
     """
     :return: agents, traits {z_i, u_i, alpha_i}
              z_i : resources at disposal of agent i
@@ -31,20 +33,28 @@ def instantiate_agents():
     """
     agent_traits = dict((agent_ind, list()) for agent_ind in range(args.num_agents))
     for agent_ind in range(args.num_agents):
+        num_neighbors = len(neighbors[agent_ind])
         # resources at disposal
         agent_traits[agent_ind] = torch.softmax(
-            torch.randint(1, args.num_agents, (args.num_agents - 1,), dtype=torch.float32,
-                          requires_grad=False).unsqueeze(0), dim=-1)
+            torch.randint(1, num_neighbors, (num_neighbors,), dtype=torch.float32,
+                          requires_grad=False).to(device[agent_ind]).unsqueeze(0), dim=-1)
         # intolerance for dominance (negative value)
-        agent_traits[agent_ind] = torch.cat((agent_traits[agent_ind], -torch.rand(1, args.num_agents - 1,
-                                                                                  dtype=torch.float32,
-                                                                                  requires_grad=False)))
+        agent_traits[agent_ind] = torch.cat((agent_traits[agent_ind],
+                                             -torch.rand(1, num_neighbors, dtype=torch.float32,
+                                                         requires_grad=False).to(device[agent_ind])))
         # reputation
         agent_traits[agent_ind] = torch.cat((agent_traits[agent_ind],
-                                             torch.randint(1, 2, (1,), dtype=torch.float32, requires_grad=False).repeat(
-                                                 args.num_agents - 1).unsqueeze(0)))
-        print(agent_traits[agent_ind][1])
-    agent_nws = dict([(agent_ind, Agent(agent_traits[agent_ind])) for agent_ind in range(args.num_agents)])
+                                             torch.tensor(repo[agent_ind], dtype=torch.float32,
+                                                          requires_grad=False).repeat(
+                                                 num_neighbors).to(device[agent_ind]).unsqueeze(0)))        
+
+    print(agent_traits)
+    
+    agent_nws = dict()
+    for agent_ind in range(args.num_agents):
+        agent_nws[agent_ind] = Agent(device[agent_ind], agent_traits[agent_ind], neighbors[agent_ind]).to(
+            device[agent_ind])
+
     return agent_nws, agent_traits
 
 
@@ -59,13 +69,12 @@ def compute_loss(target_class, all_log_probs, rewards_agents, log_probs):
     classification_loss = nn.CrossEntropyLoss()
     # Compute loss for each agent
     for agent_ind in range(args.num_agents):
-
         # Compute cumulative rewards
         rewards = rewards_agents[agent_ind].clone()
         n = rewards.size(0)
 
         # Compute classification loss
-        l1 = classification_loss(torch.stack(all_log_probs[agent_ind]), target_class.repeat(n))
+        l1 = classification_loss(torch.stack(all_log_probs[agent_ind]), target_class.to(device[agent_ind]).repeat(n))
 
         for i in range(n - 2, -1, -1):
             rewards[i] = rewards[i] + args.gamma * rewards[i + 1]
@@ -80,16 +89,32 @@ def compute_loss(target_class, all_log_probs, rewards_agents, log_probs):
 
 if __name__ == '__main__':
 
+    # assign devices for cpu / gpu / multi-gpu
+    # assert torch.cuda.is_available()  # for gpu processes
+    # count = torch.cuda.device_count()
+    device = {}
+    for agent_id in range(args.num_agents):
+        # device[agent_id] = torch.device("cuda:" + str(agent_id % count))
+        device[agent_id] = 'cpu'
+
     # create the required directories
     if not os.path.exists(model_path):
         os.mkdir(model_path)
 
+    # neighbours
+    repo = [2, 1, 1, 1]
+    neighbors = {0:[1,2,3], 1:[0,2], 2:[0,3], 3:[0,1]}
+
+    # fix reputation
+    # repo = utils.generate_reputation(args.num_agents, sum_repo=14, upper_limit=4)
+    # print(repo)
+
     # instantiate agents and their corresponding traits
-    agents, traits_agents = instantiate_agents()
+    agents, traits_agents = instantiate_agents(neighbors=neighbors)
     pickle.dump(traits_agents, traits_file)
     traits_file.close()
     # calculate total reputation by summing all the 0th elements of the reputation lists
-    total_reputation = torch.tensor(0.0)
+    total_reputation = torch.tensor(0.0, dtype=torch.float32)
     for agent_id in range(args.num_agents):
         total_reputation += traits_agents[agent_id][2][0]
     # initialize optimizers
@@ -101,48 +126,60 @@ if __name__ == '__main__':
     classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
 
     # Initialize running mean of rewards
-    rewards_mean = dict([(agent, torch.zeros(args.num_steps)) for agent in agents])
+    rewards_mean = {}
+    for agent_id in range(args.num_agents):
+        rewards_mean[agent_id] = torch.zeros(args.num_steps, dtype=torch.float32).to(device[agent_id])
+
     running_rewards = 0.0
     num_consensus = 0  # number of times the community reaches consensus
     avg_steps, step = 0, 0  # time needed on as average to reach consensus
 
-    for epoch in range(4):
+    for epoch in range(3):
         # start running episodes
-        for episode_id in range(args.num_episodes):
+        for episode_id in tqdm(range(args.num_episodes)):
             # pick up one sample from train dataset
             (img, target) = train_set[episode_id]
+
             img = img.unsqueeze(0)
             target = torch.tensor([target])
 
-            # initialize / re-initialize all parameters
-            traits = [traits_agents[agent_id].clone() for agent_id in range(args.num_agents)]
-            agent_all_log_probs = dict([(agent_id, []) for agent_id in range(args.num_agents)])
-            agent_log_probs = dict([(agent_id, []) for agent_id in range(args.num_agents)])
-            agent_rewards = dict([(agent_id, []) for agent_id in range(args.num_agents)])
-            msgs_input = dict([(agent_id, torch.zeros(args.num_agents - 1, args.msg_v_dim + args.msg_k_dim))
-                               for agent_id in range(args.num_agents)])
-            msgs_broadcast = dict([(agent_id, torch.zeros(args.num_agents - 1, args.msg_v_dim))
-                                   for agent_id in range(args.num_agents)])
-            agent_loss = torch.tensor(0.0)
+            # initialize / re-initialize all parameters\
+            traits = {}
+            agent_all_log_probs, agent_log_probs = {}, {}
+            agent_rewards = {}
+            msgs_input, msgs_broadcast = {}, {}
+
+            for agent_id in range(args.num_agents):
+                num_neighbors = len(neighbors[agent_id])
+                traits[agent_id] = traits_agents[agent_id].clone()
+                agent_all_log_probs[agent_id] = []  # log prob of actions
+                agent_log_probs[agent_id] = []  # log prob of action taken
+                agent_rewards[agent_id] = []
+                msgs_input[agent_id] = torch.zeros(num_neighbors, args.msg_v_dim + args.msg_k_dim,
+                                                   dtype=torch.float32).to(device[agent_id])
+                msgs_broadcast[agent_id] = torch.zeros(num_neighbors, args.msg_v_dim + args.msg_k_dim,
+                                                       dtype=torch.float32).to(device[agent_id])
+
+            agent_loss = torch.tensor(0.0).to('cpu')
             losses = dict()
 
             # reset agent hidden vectors of LSTM and traits to original values
             for agent_id in range(args.num_agents):
                 agents[agent_id].reset_agent(traits[agent_id])
 
-            # reputation = dict([(agent_id, torch.zeros(args.num_agents - 1)) for agent_id in range(args.num_agents)])
             if episode_id == 48000:
                 resources_file.write('episode:' + str(episode_id) + '\n')
+
             # begin episode
             for step in range(args.num_steps):
                 consensus = [0] * args.num_classes
-                for agent_id in range(args.num_agents):
 
+                for agent_id in range(args.num_agents):
                     # agents get to see the cropped image for partial observability
                     cropped_image = utils.crop_image(img, str(agent_id))
                     traits[agent_id], action, predicted_probs, msgs_broadcast[agent_id], all_probs = \
-                        agents[agent_id](cropped_image,
-                                         msgs_input[agent_id])
+                        agents[agent_id](cropped_image.to(device[agent_id]),
+                                         msgs_input[agent_id].to(device[agent_id]))
 
                     agent_log_probs[agent_id].append(predicted_probs)
                     agent_all_log_probs[agent_id].append(all_probs.squeeze(0))
@@ -156,58 +193,35 @@ if __name__ == '__main__':
                         consensus[action.item()] += traits[agent_id][2][0].item()
 
                 # message passing
+                msg_input_dict = defaultdict(list)
                 for agent_id in range(args.num_agents):
                     index1 = 0
-                    for neighbour in range(args.num_agents):
-                        if neighbour < agent_id:
-                            msgs_input[neighbour][agent_id - 1] = msgs_broadcast[agent_id][index1].clone()
-                            index1 += 1
-                        elif neighbour > agent_id:
-                            msgs_input[neighbour][agent_id] = msgs_broadcast[agent_id][index1].clone()
-                            index1 += 1
+                    for neighbour in neighbors[agent_id]:
+                        msg_input_dict[neighbour].append(msgs_broadcast[agent_id][index1].clone())
+                        index1 += 1
 
-                    # for neighbour in range(args.num_agents):
-                    #     if neighbour != agent_id:
-                    #         msgs_input[neighbour][index] = msgs_broadcast[index].clone()
-                    #         # reputation[neighbour] += attention[index].detach().repeat(args.num_agents - 1)
-                    #         index += 1
-
-                # for agent_id in range(args.num_agents):
-                #     traits[agent_id][2] = reputation[agent_id] / (args.num_agents - 1)
-                # total_reputation += traits[agent_id][2][0]
-
-                # prize = np.array(consensus)[target.item()]
-                # for agent_id in range(args.num_agents):
-                #     prize_share = (traits[agent_id][2][0].detach() / total_reputation) * prize
-                #     agent_rewards[agent_id].append(prize_share)
+                msgs_input = dict([(agent_id, torch.stack(values)) for agent_id, values in msg_input_dict.items()])
 
                 # define reward function
                 if max(np.array(consensus)) > args.threshold and \
                         torch.tensor(consensus).argmax().unsqueeze(0) == target:
-                    # final_pred = torch.tensor(consensus).argmax().unsqueeze(0)
-                    # if final_pred == target:
-                    # print('episode:', episode_id, 'steps taken:', step, '(reached consensus with correct prediction)')
-                    prize = args.prize
                     num_consensus += 1
 
                     for agent_id in range(args.num_agents):
-                        prize_share = (traits[agent_id][2][0].detach() / total_reputation) * prize
-                        agent_rewards[agent_id].append(prize_share.item())
+                        prize_share = (traits[agent_id][2][0] / total_reputation) * args.prize
+                        agent_rewards[agent_id].append(prize_share)
                     break
-                # elif step == args.num_steps - 1:
-                #     print('episode:', episode_id, '(did not reach consensus)')
-                #     final_pred = torch.tensor(consensus).unsqueeze(0)
-                #     for agent_id in range(args.num_agents):
-                #         agent_rewards[agent_id].append(-args.penalize)
                 else:
                     for agent_id in range(args.num_agents):
-                        prize_share = (traits[agent_id][2][0].detach() / total_reputation) * (-1)
+                        prize_share = (traits[agent_id][2][0] / total_reputation) * args.penalize
                         agent_rewards[agent_id].append(prize_share)
 
-            agent_rewards = [torch.tensor(agent_rewards[agent_id]) for agent_id in range(args.num_agents)]
-            print_rewards = [agent_rewards[agent_id].sum().item() for agent_id in range(args.num_agents)]
-            agent_log_probs = [torch.cat([x.view(-1, 1) for x in agent_log_probs[agent_id]], dim=1).squeeze()
-                               for agent_id in range(args.num_agents)]
+            for agent_id in range(args.num_agents):
+                agent_rewards[agent_id] = torch.tensor(agent_rewards[agent_id]).to(device[agent_id])
+                agent_log_probs[agent_id] = torch.cat([x.view(-1, 1)
+                                                       for x in agent_log_probs[agent_id]], dim=1).squeeze()
+
+            print_rewards = [agent_rewards[agent_id].detach().sum().item() for agent_id in range(args.num_agents)]
 
             compute_loss(target, agent_all_log_probs, agent_rewards, agent_log_probs)
 
@@ -215,7 +229,8 @@ if __name__ == '__main__':
                 optim.zero_grad()
 
             for agent_id in range(args.num_agents):
-                agent_loss += losses[agent_id].clone()
+                agent_loss += losses[agent_id].to('cpu')
+
             agent_loss.backward()
 
             # for agent_id in range(args.num_agents):

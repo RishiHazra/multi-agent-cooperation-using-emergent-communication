@@ -12,6 +12,7 @@ class ImgEncoder(nn.Module):
     :param: cropped_image: partial image observations
     :returns: x: encoded image observations
     """
+
     def __init__(self):
         super(ImgEncoder, self).__init__()
         self.layer = nn.Sequential(
@@ -36,6 +37,7 @@ class CharEncoder(nn.Module):
             char_hidden_old: old hidden state of gru
     :return: char_hidden_new: new hidden state of gru
     """
+
     def __init__(self):
         super(CharEncoder, self).__init__()
         self.gru = nn.GRUCell(1, args.text_hidden)
@@ -55,6 +57,7 @@ class Receiver(nn.Module):
     :return: pooled: pooled messages
              attention: attention weights
     """
+
     def __init__(self):
         super(Receiver, self).__init__()
         self.layer_query = nn.Linear(1, args.msg_k_dim)
@@ -80,8 +83,10 @@ class Sender(nn.Module):
     :return: msgs_hidden_new: new hidden state of gru-cell
              msgs_broadcast: broadcasts messages to all agents
     """
-    def __init__(self):
+
+    def __init__(self, neighbors):
         super(Sender, self).__init__()
+        self.num_neighbors = len(neighbors)
         self.gru = nn.GRUCell(args.msg_v_dim, args.msg_v_dim)
         self.w_enc = nn.Linear(args.encoded_size, args.msg_v_dim)
         self.w_msg = nn.Linear(args.msg_v_dim, args.msg_v_dim)
@@ -92,7 +97,7 @@ class Sender(nn.Module):
         msg_v = self.w_enc(img_enc) + self.w_msg(msg_hidden_new)
         msg_k = self.layer_resources(resources.unsqueeze(1))
         # different messages for different agents # [num_agents-1,10]
-        msgs_broadcast = torch.cat((msg_k, msg_v[0].clone().repeat(args.num_agents-1, 1)), dim=-1)
+        msgs_broadcast = torch.cat((msg_k, msg_v[0].clone().repeat(self.num_neighbors, 1)), dim=-1)
         return msg_hidden_new, msgs_broadcast
 
 
@@ -106,8 +111,10 @@ class Decoder(nn.Module):
     :return: action: output of Straight-through Gumbel Softmax
              log_probs: log probability of all actions
     """
-    def __init__(self):
+
+    def __init__(self, device):
         super(Decoder, self).__init__()
+        self.device = device
         self.w_img = nn.Linear(args.encoded_size, args.num_classes)
         self.w_msg = nn.Linear(args.msg_v_dim, args.num_classes)
         self.log_softmax = nn.LogSoftmax(dim=-1)
@@ -119,7 +126,7 @@ class Decoder(nn.Module):
         return -torch.log(-torch.log(u + eps) + eps)
 
     def gumble_softmax_sample(self, log_logits, temperature):
-        y = log_logits + self.sample_gumble(log_logits.size())
+        y = log_logits + self.sample_gumble(log_logits.size()).to(self.device)
         return self.softmax(y / temperature)
 
     def forward(self, encoder_out, msg_pooled):
@@ -128,6 +135,6 @@ class Decoder(nn.Module):
         y_gumbel = self.gumble_softmax_sample(y_log_probs, args.temp)
 
         y_gumbel, ind = y_gumbel.max(dim=-1)
-        y_hard = torch.tensor(ind, dtype=torch.float32)
-        action = (y_hard - y_gumbel).detach() + y_gumbel
+        y_hard = ind.float()
+        action = (y_hard.to(self.device) - y_gumbel).detach() + y_gumbel
         return action.long(), y_log_probs.gather(1, action.long().view(-1, 1)).view(-1), y_log_probs

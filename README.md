@@ -30,3 +30,6 @@ Above tsne communication plots represent (from left to right):
 1. all agents communicating 
 2. 2 agents communicating
 3. 1 agent communicating with 8 neighbors 
+
+## Refer
+[1] [Social complexity as a proximate and ultimate factor in communicative complexity](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3367695/)
